@@ -1,0 +1,73 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Loading Screen</title>
+    <link rel="stylesheet" href="style.css" />
+    <!--
+      YouTube Iframe API.
+      Loading it with a script tag (rather than dynamically injecting it) keeps
+      the player ready as early as possible. The API calls window.onYouTubeIframeAPIReady
+      once it has loaded - see script.js.
+    -->
+    <script src="https://www.youtube.com/iframe_api"></script>
+</head>
+<body>
+
+    <!-- Fullscreen YouTube background player.
+         The iframe itself is created by the Iframe API on this <div>; CSS
+         scales/positions it to cover the whole viewport and hide the chrome. -->
+    <div id="yt-background">
+        <div id="yt-player"></div>
+    </div>
+
+    <!-- Dark scrim + blur overlay so text stays readable above the video. -->
+    <div id="overlay"></div>
+
+    <!-- Main content layer (server name, tips, progress bar). -->
+    <main id="content">
+
+        <!-- Server branding -->
+        <div id="brand">
+            <h1 id="server-name">FIVEM&nbsp;SERVER</h1>
+            <p id="server-tagline">Loading world data &mdash; please wait</p>
+        </div>
+
+        <!-- Rotating loading tip -->
+        <p id="tip">Tip: Press F1 for help once you spawn.</p>
+
+        <!-- Progress section -->
+        <section id="progress-section">
+            <!-- Percentage label aligned to the bar -->
+            <div id="progress-meta">
+                <span id="progress-label">Initializing</span>
+                <span id="progress-percent">0%</span>
+            </div>
+
+            <!-- Functional progress bar. Width is set from JS based on
+                 loadProgress/onLogLine events coming from FiveM. -->
+            <div id="progress-track">
+                <div id="progress-bar"></div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Custom volume control (bottom-right corner). -->
+    <div id="volume-control">
+        <button id="volume-icon" title="Mute / Unmute" aria-label="Mute toggle">
+            <!-- SVG icon: speaker. JS swaps the path when muted. -->
+            <svg id="volume-svg" viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">
+                <path id="volume-path"
+                      d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"
+                      fill="currentColor"/>
+            </svg>
+        </button>
+        <input id="volume-slider" type="range" min="0" max="100" value="30" aria-label="Volume" />
+    </div>
+
+    <!-- Application logic. Loaded after the DOM so it can grab elements directly. -->
+    <script src="script.js"></script>
+</body>
+</html>
