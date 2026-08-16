@@ -1,15 +1,17 @@
 -- ============================================================================
 -- Ballas Gang Resource - Server
--- Framework: QBCore
+-- Framework: ESX Legacy
 -- Responsibilities:
 --   * Authorize vehicle spawn requests (job + grade checks).
 --   * Spawn the vehicle at the garage spawn point with purple paint + plate.
---   * Expose a debug-grade lookup if needed.
+--   * Register the society so esx_society manages the gang's bank account.
+--   * Provide society deposit/withdraw that talks to esx_addon_account.
 -- All privilege checks happen server-side; the client is never trusted.
 -- ============================================================================
 
-local QBCore = exports['qb-core']:GetCoreObject()
+ESX = exports['es_extended']:getSharedObject()
 local JobName = Config.JobName
+local SocietyAccount = Config.SocietyAccount
 
 -- Returns the minimum grade required to spawn `model`, or nil if unknown.
 local function MinGradeForModel(model)
@@ -28,86 +30,173 @@ local function MakePlate()
 end
 
 -- ----------------------------------------------------------------------------
+-- Register the society on resource start.
+-- esx_society uses the account name `society_<job>` for both money and data.
+-- ----------------------------------------------------------------------------
+AddEventHandler('onResourceStart', function(res)
+    if res ~= GetCurrentResourceName() then return end
+
+    if GetResourceState('esx_society') == 'started' then
+        TriggerEvent('esx_society:registerSociety',
+            JobName,           -- name
+            'Ballas',          -- label
+            SocietyAccount,    -- account (addon_account name)
+            SocietyAccount,    -- datastore
+            SocietyAccount,    -- inventory
+            { type = 'private' })
+    end
+
+    print(('^5[Ballas]^7 Resource started. Job: %s, Boss grade name: %s'):format(
+        JobName, Config.BossGradeName))
+end)
+
+-- ----------------------------------------------------------------------------
 -- Vehicle spawn handler
 -- ----------------------------------------------------------------------------
 RegisterNetEvent('ballas:server:SpawnVehicle', function(model)
     local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
 
-    -- Job check.
-    if Player.PlayerData.job.name ~= JobName then
-        DropPlayer(src, 'Ballas: attempted spawn without job') -- or just Notify
+    -- Job + grade check (server-authoritative).
+    local job = xPlayer.getJob()
+    if job.name ~= JobName then
+        DropPlayer(src, 'Ballas: attempted spawn without the gang job')
         return
     end
 
-    -- Grade check: player grade must be >= the model's required grade.
-    local playerGrade = Player.PlayerData.job.grade.level or 0
+    local playerGrade = job.grade or 0
     local required = MinGradeForModel(model)
     if not required then
+        TriggerClientEvent('esx:showNotification', src, 'Unknown vehicle model.')
         return
     end
     if playerGrade < required then
-        TriggerClientEvent('QBCore:Notify', src,
-            ('Your rank is too low for the %s.'):format(model), 'error')
+        TriggerClientEvent('esx:showNotification', src,
+            ('Your rank is too low for the %s.'):format(model))
         return
     end
 
-    -- Hash the model (client hashes are unreliable, do it here).
+    -- Validate the model on the server (client hashes are not trusted).
     local hash = GetHashKey(model)
     if not IsModelInCdimage(hash) or not IsModelAVehicle(hash) then
-        TriggerClientEvent('QBCore:Notify', src, 'Invalid vehicle model.', 'error')
+        TriggerClientEvent('esx:showNotification', src, 'Invalid vehicle model.')
         return
     end
 
     local plate = MakePlate()
     local spawn = Config.Locations.Garage.spawn
 
-    -- Create the vehicle server-side via QBCore's vehicle spawn helper.
-    -- This ensures the entity is networked and owned by the server, then
-    -- transferred to the player once created.
-    QBCore.Functions.SpawnVehicle(model, function(veh)
+    -- ESX server-side vehicle creation. The callback receives the created
+    -- entity (server-owned), which we configure then hand to the client.
+    ESX.CreateVehicle({
+        model = hash,
+        plate = plate,
+        vehicle = {
+            colors = { Config.VehiclePrimaryColor, Config.VehicleSecondaryColor },
+            dirtLevel = 0.0,
+        },
+        coords = vector4(spawn.x, spawn.y, spawn.z, spawn.w),
+        type = 'automobile',
+    }, function(veh)
         if not veh or not DoesEntityExist(veh) then
-            TriggerClientEvent('QBCore:Notify', src, 'Failed to spawn vehicle.', 'error')
+            TriggerClientEvent('esx:showNotification', src, 'Failed to spawn vehicle.')
             return
         end
 
-        -- Apply paint server-side so it is authoritative.
+        -- Authoritative paint (purple primary + secondary).
         SetVehicleColours(veh, Config.VehiclePrimaryColor, Config.VehicleSecondaryColor)
         SetVehicleExtraColours(veh, Config.VehiclePrimaryColor, 0)
-
-        -- Plate + properties.
         SetVehicleNumberPlateText(veh, plate)
-        SetEntityHeading(veh, spawn.w)
         SetVehicleFuelLevel(veh, 100.0)
         SetVehicleDirtLevel(veh, 0.0)
 
-        -- Lock & keys via QBCore vehicle keys (optional integration).
-        TriggerEvent('vehiclekeys:server:SetVehicleOwner', plate)
+        -- Optional: hand keys via a vehicle-keys resource if present.
+        if GetResourceState('esx_vehiclekey') == 'started' then
+            TriggerEvent('esx_vehiclekey:giveKeys', plate, src)
+        end
 
-        -- Hand off to the client for seat placement / final polish.
         local netId = NetworkGetNetworkIdFromEntity(veh)
         TriggerClientEvent('ballas:client:VehicleSpawned', src, netId, plate)
-    end, spawn, true)
+    end)
 end)
 
 -- ----------------------------------------------------------------------------
--- Boss-menu authorization guard
--- If qb-bossmenu is not enforcing job grade, we re-assert here.
+-- Society money: deposit / withdraw.
+-- These talk directly to esx_addon_account so the gang's bank balance stays
+-- correct even if a UI resource is swapped out. esx_society's boss menu uses
+-- the same account, so the two never desync.
 -- ----------------------------------------------------------------------------
-RegisterNetEvent('ballas:server:CheckBoss', function()
-    local src = source
-    local Player = QBCore.Functions.GetPlayer(src)
-    if not Player then return end
-    local ok = Player.PlayerData.job.name == JobName
-        and (Player.PlayerData.job.grade.level or 0) == Config.BossGrade
-    TriggerClientEvent('ballas:client:BossResult', src, ok)
-end)
-
--- Quick log on resource start.
-AddEventHandler('onResourceStart', function(res)
-    if res == GetCurrentResourceName() then
-        print(('^5[Ballas]^7 Resource started. Job: %s, Boss grade: %d'):format(
-            JobName, Config.BossGrade))
+local function GetSocietyAccount(cb)
+    if GetResourceState('esx_addonaccount') ~= 'started' then
+        cb(nil)
+        return
     end
+    TriggerEvent('esx_addonaccount:getSharedAccount', SocietyAccount, cb)
+end
+
+RegisterNetEvent('ballas:server:DepositMoney', function(amount)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
+
+    local job = xPlayer.getJob()
+    if job.name ~= JobName or job.grade_name ~= Config.BossGradeName then
+        TriggerClientEvent('esx:showNotification', src, 'Only the O.G. can deposit.')
+        return
+    end
+
+    amount = ESX.Math.Round(tonumber(amount) or 0)
+    if amount <= 0 then return end
+
+    if xPlayer.getAccount('money').money < amount then
+        TriggerClientEvent('esx:showNotification', src, 'You do not have that much cash.')
+        return
+    end
+
+    xPlayer.removeAccountMoney('money', amount)
+    GetSocietyAccount(function(account)
+        if not account then
+            -- Addon account missing: refund the player.
+            xPlayer.addAccountMoney('money', amount)
+            TriggerClientEvent('esx:showNotification', src,
+                'Society account is not configured.')
+            return
+        end
+        account.addMoney(amount)
+        TriggerClientEvent('esx:showNotification', src,
+            ('Deposited $%s to the society.'):format(amount))
+    end)
+end)
+
+RegisterNetEvent('ballas:server:WithdrawMoney', function(amount)
+    local src = source
+    local xPlayer = ESX.GetPlayerFromId(src)
+    if not xPlayer then return end
+
+    local job = xPlayer.getJob()
+    if job.name ~= JobName or job.grade_name ~= Config.BossGradeName then
+        TriggerClientEvent('esx:showNotification', src, 'Only the O.G. can withdraw.')
+        return
+    end
+
+    amount = ESX.Math.Round(tonumber(amount) or 0)
+    if amount <= 0 then return end
+
+    GetSocietyAccount(function(account)
+        if not account then
+            TriggerClientEvent('esx:showNotification', src,
+                'Society account is not configured.')
+            return
+        end
+        if account.money < amount then
+            TriggerClientEvent('esx:showNotification', src,
+                'The society does not have that much money.')
+            return
+        end
+        account.removeMoney(amount)
+        xPlayer.addAccountMoney('money', amount)
+        TriggerClientEvent('esx:showNotification', src,
+            ('Withdrew $%s from the society.'):format(amount))
+    end)
 end)

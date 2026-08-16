@@ -1,40 +1,48 @@
 -- ============================================================================
 -- Ballas Gang Resource - Client
--- Framework: QBCore
+-- Framework: ESX Legacy
 -- Responsibilities:
 --   * Create the territory blip.
 --   * Draw markers for the garage and boss menu.
 --   * Open the garage menu (vehicle spawn, roster-limited by grade).
---   * Open the boss menu (society management) for O.G. only.
+--   * Open the boss menu (esx_society) for the O.G. (boss grade) only.
 -- Performance: a single 0-wait loop checks player distance against the
 -- handful of fixed markers, so no heavy threads are created.
 -- ============================================================================
 
-local QBCore = exports['qb-core']:GetCoreObject()
-local PlayerJob, PlayerGrade
+-- ESX shared object. With @es_extended/imports.lua in shared_scripts this is
+-- already defined as a global; the line below is a safe fallback for servers
+-- that only use the legacy export.
+ESX = exports['es_extended']:getSharedObject()
 
--- Cached references (populated in LoadPlayer) to avoid per-frame calls.
+-- Cached copies of the player's job so we don't call into ESX every frame.
+local PlayerJobName   = nil
+local PlayerGrade     = nil
+local PlayerGradeName = nil
+
+-- Refresh the cached job fields from ESX.PlayerData.
 local function RefreshPlayer()
-    local Player = QBCore.Functions.GetPlayerData()
-    PlayerJob  = Player and Player.job and Player.job.name or nil
-    PlayerGrade = Player and Player.job and Player.job.grade and Player.job.grade.level or nil
+    local job = ESX.PlayerData and ESX.PlayerData.job or nil
+    if job then
+        PlayerJobName   = job.name
+        PlayerGrade     = job.grade
+        PlayerGradeName = job.grade_name
+    end
 end
 
--- Listen for job changes so cached grade stays accurate.
-RegisterNetEvent('QBCore:Client:OnJobUpdate', function(job)
+-- ESX fires these events when the player loads or their job changes.
+RegisterNetEvent('esx:playerLoaded', RefreshPlayer)
+RegisterNetEvent('esx:setJob', function(job)
     if job then
-        PlayerJob = job.name
-        PlayerGrade = (job.grade and job.grade.level) or 0
+        PlayerJobName   = job.name
+        PlayerGrade     = job.grade
+        PlayerGradeName = job.grade_name
     end
 end)
 
-RegisterNetEvent('QBCore:Client:SetPlayerData', function(data)
-    if data and data.job then RefreshPlayer() end
-end)
-
-AddEventHandler('QBCore:Client:OnPlayerLoaded', RefreshPlayer)
 AddEventHandler('onResourceStart', function(res)
     if res == GetCurrentResourceName() then
+        -- PlayerData may already be populated if the player was already in.
         RefreshPlayer()
     end
 end)
@@ -60,12 +68,16 @@ end)
 
 -- Returns true if the local player is a Ballas member.
 local function IsBallas()
-    return PlayerJob == Config.JobName
+    return PlayerJobName == Config.JobName
 end
 
 -- Returns true if the local player is the boss (O.G.).
+-- ESX exposes both the numeric grade (job.grade) and the grade name
+-- (job.grade_name). We check the name because esx_society authorizes on it.
 local function IsBoss()
-    return PlayerJob == Config.JobName and PlayerGrade == Config.BossGrade
+    return PlayerJobName == Config.JobName
+        and PlayerGradeName == Config.BossGradeName
+        and (PlayerGrade or -1) >= Config.BossGrade
 end
 
 -- Draws a single marker. Cheap helper so the main loop stays readable.
@@ -76,70 +88,68 @@ local function DrawMarkerAt(pos)
         m.bobUp, true, 2, false)
 end
 
--- Builds the garage vehicle menu based on the player's current grade.
-local function GetGarageOptions()
-    local opts = {}
+-- Floating help text shown when standing on a marker.
+local function DrawHelpText(pos, text)
+    ESX.Game.Utils.DrawText3D(vector3(pos.x, pos.y, pos.z), text, 0.7)
+end
+
+-- Builds the garage vehicle elements for the ESX menu based on grade.
+local function GetGarageElements()
+    local elements = {}
     for _, v in ipairs(Config.Vehicles) do
         if (PlayerGrade or -1) >= v.grade then
-            opts[#opts + 1] = {
-                title = v.label,
-                description = ('Grade %d+'):format(v.grade),
-                icon = 'fa-solid fa-car',
-                -- Capture model in closure; called when selected.
-                onSelect = function()
-                    TriggerServerEvent('ballas:server:SpawnVehicle', v.model)
-                end,
+            elements[#elements + 1] = {
+                label = ('%s  (Grade %d+)'):format(v.label, v.grade),
+                value = v.model,
             }
         end
     end
-    return opts
+    return elements
 end
 
--- Opens the garage menu (uses ox_lib context menu if available, else a simple
--- registered NUI command. ox_lib is optional and gracefully degraded.)
+-- Opens the garage menu using ESX's built-in UI (no extra dependencies).
 local function OpenGarageMenu()
     if not IsBallas() then
-        QBCore.Functions.Notify('You are not a Ballas member.', 'error')
+        ESX.ShowNotification('You are not a Ballas member.')
         return
     end
 
-    local options = GetGarageOptions()
-    if #options == 0 then
-        QBCore.Functions.Notify('No vehicles available at your rank.', 'error')
+    local elements = GetGarageElements()
+    if #elements == 0 then
+        ESX.ShowNotification('No vehicles available at your rank.')
         return
     end
 
-    -- Use ox_lib context menu if present; otherwise fall back to a basic list.
-    if GetResourceState('ox_lib') == 'started' then
-        exports['ox_lib']:registerContext({
-            id = 'ballas_garage',
-            title = 'Ballas Garage',
-            options = options,
-        })
-        exports['ox_lib']:showContext('ballas_garage')
-    else
-        -- Minimal fallback: spawn the highest-tier vehicle the player owns.
-        -- (Real servers should add ox_lib or implement a custom NUI list.)
-        local top = options[#options]
-        if top.onSelect then top.onSelect() end
-    end
+    ESX.UI.Menu.Open('default', GetCurrentResourceName(), 'ballas_garage', {
+        title    = 'Ballas Garage',
+        align    = 'top-left',
+        elements = elements,
+    }, function(data, menu)
+        local model = data.current.value
+        menu.close()
+        TriggerServerEvent('ballas:server:SpawnVehicle', model)
+    end, function(data, menu)
+        menu.close()
+    end)
 end
 
--- Opens the boss menu via qb-bossmenu (standard society management UI).
--- qb-bossmenu already handles deposit/withdraw/hire/fire/promote/demote; we
--- simply tell it to open for the 'ballas' job.
+-- Opens the boss menu via esx_society (deposit/withdraw/hire/fire/promote/demote).
+-- esx_society itself re-checks that the player's grade_name is in BossGrades,
+-- so this is safe even if our client check is somehow bypassed.
 local function OpenBossMenu()
     if not IsBoss() then
-        QBCore.Functions.Notify('Only the O.G. can access this.', 'error')
+        ESX.ShowNotification('Only the O.G. can access this.')
         return
     end
 
-    -- qb-bossmenu exposes an export to open the menu for a given job.
-    if GetResourceState('qb-bossmenu') == 'started' then
-        TriggerEvent('qb-bossmenu:client:OpenMenu')
-    else
-        QBCore.Functions.Notify('qb-bossmenu resource is not running.', 'error')
+    if GetResourceState('esx_society') ~= 'started' then
+        ESX.ShowNotification('esx_society is not running.')
+        return
     end
+
+    TriggerEvent('esx_society:openBossMenu', Config.JobName, function(menu)
+        ESX.UI.Menu.CloseAll()
+    end, { wash = false })
 end
 
 -- ----------------------------------------------------------------------------
@@ -173,9 +183,8 @@ CreateThread(function()
         -- Interaction prompts.
         if dgGarage <= g.interactDist then
             if IsBallas() then
-                QBCore.Functions.DrawText(g.marker.x, g.marker.y, g.marker.z + 0.5,
-                    '[E] Open Garage')
-                if IsControlJustReleased(0, 38) then -- E
+                DrawHelpText(g.marker, '[E] Open Garage')
+                if IsControlJustReleased(0, 38) then -- E / INPUT_CONTEXT
                     OpenGarageMenu()
                 end
             end
@@ -183,9 +192,8 @@ CreateThread(function()
 
         if dgBoss <= b.interactDist then
             if IsBoss() then
-                QBCore.Functions.DrawText(b.marker.x, b.marker.y, b.marker.z + 0.5,
-                    '[E] Boss Menu')
-                if IsControlJustReleased(0, 38) then -- E
+                DrawHelpText(b.marker, '[E] Boss Menu')
+                if IsControlJustReleased(0, 38) then -- E / INPUT_CONTEXT
                     OpenBossMenu()
                 end
             end
@@ -211,7 +219,7 @@ RegisterNetEvent('ballas:client:VehicleSpawned', function(netId, plate)
     end
     if not DoesEntityExist(veh) then return end
 
-    -- Apply purple primary + secondary paint.
+    -- Apply purple primary + secondary paint (also applied server-side).
     SetVehicleColours(veh, Config.VehiclePrimaryColor, Config.VehicleSecondaryColor)
     SetVehicleExtraColours(veh, Config.VehiclePrimaryColor, 0)
 
@@ -222,5 +230,5 @@ RegisterNetEvent('ballas:client:VehicleSpawned', function(netId, plate)
     SetPedIntoVehicle(PlayerPedId(), veh, -1)
     SetVehicleEngineOn(veh, true, true, false)
 
-    QBCore.Functions.Notify(('Vehicle spawned: %s'):format(plate), 'success')
+    ESX.ShowNotification(('Vehicle spawned: %s'):format(plate))
 end)

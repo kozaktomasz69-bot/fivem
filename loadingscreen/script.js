@@ -6,6 +6,12 @@
  *   1. YouTube Iframe API  -> fullscreen, autoplay, looping background video
  *      with a hidden chrome, plus a volume control that calls setVolume().
  *
+ *      AUTOPLAY FIX: FiveM's CEF (Chromium) blocks audio autoplay without a
+ *      prior user gesture. A full-screen "Click to enter" overlay captures the
+ *      first click; ONLY THEN do we call player.playVideo() + player.unMute()
+ *      (in startAudioAfterInteraction). Until then the video plays muted/visual
+ *      only (or is hidden behind the overlay).
+ *
  *   2. FiveM loadscreen events -> window 'message' events posted by the game
  *      into the NUI frame. We react to `loadProgress` (to drive the bar width)
  *      and `onLogLine` (to update the status label), per the official schema:
@@ -33,6 +39,7 @@
     const volumeSlider   = document.getElementById('volume-slider');
     const volumeIcon     = document.getElementById('volume-icon');
     const volumePath     = document.getElementById('volume-path');
+    const enterOverlay   = document.getElementById('enter-overlay');
     const root           = document.body;
 
     /* ---------- YouTube player state --------------------------------------- */
@@ -40,6 +47,7 @@
     let ytPlayer = null;
     let isMuted  = false;   // mirrors the player mute state for the icon
     let lastVolume = DEFAULT_VOLUME;
+    let userInteracted = false;  // becomes true on the first click-to-enter
 
     /**
      * Called automatically by the YouTube Iframe API once it has finished
@@ -56,7 +64,7 @@
         ytPlayer = new YT.Player('yt-player', {
             videoId: VIDEO_ID,
             playerVars: {
-                autoplay: 1,        // start playing immediately
+                autoplay: 1,        // request autoplay; audio only starts after click
                 controls: 0,        // hide all player controls
                 disablekb: 1,       // disable keyboard shortcuts
                 fs: 0,              // hide fullscreen button
@@ -78,20 +86,42 @@
 
     /**
      * onReady fires once the player has loaded the video element.
-     * We set the default volume and ensure playback. To satisfy browser
-     * autoplay policies (which block autoplay WITH sound without a user
-     * gesture), we begin muted; the first interaction with the volume
-     * control counts as a gesture and unmutes at 30%.
+     *
+     * IMPORTANT (FiveM CEF autoplay policy): Chromium blocks audio autoplay
+     * without a prior user gesture, so we MUST NOT call playVideo()+unMute()
+     * here. We keep the player muted and wait for the click-to-enter overlay.
+     * The video may start muted+visual-only; audio is unlocked in
+     * startAudioAfterInteraction() once the user clicks.
      */
     function onPlayerReady() {
         try {
-            ytPlayer.setVolume(DEFAULT_VOLUME); // apply default volume value
-            ytPlayer.mute();                    // start muted so autoplay is allowed
+            ytPlayer.setVolume(DEFAULT_VOLUME); // stage the volume value
+            ytPlayer.mute();                    // muted = autoplay allowed (visual only)
             isMuted = true;
             updateVolumeIcon();
+            // Do NOT call playVideo with sound here. If the browser allows
+            // muted autoplay the video will be visible behind the overlay.
             ytPlayer.playVideo();
         } catch (e) {
             /* setVolume may throw if the player isn't fully ready; ignore. */
+        }
+    }
+
+    /**
+     * The ONLY place audio is actually started. Called from the click-to-enter
+     * overlay handler, which is a real user gesture -> CEF permits unmuted
+     * playback. Sets the default volume, unmutes, and resumes/starts playback.
+     */
+    function startAudioAfterInteraction() {
+        if (!ytPlayer) return;
+        try {
+            ytPlayer.setVolume(DEFAULT_VOLUME);
+            ytPlayer.unMute();
+            isMuted = false;
+            updateVolumeIcon();
+            ytPlayer.playVideo();
+        } catch (e) {
+            /* player not ready yet; the next state-change will retry */
         }
     }
 
@@ -110,6 +140,42 @@
         const bg = document.getElementById('yt-background');
         if (bg) bg.style.display = 'none';
     }
+
+    /* ---------- Click-to-enter overlay ------------------------------------- */
+    //
+    // This is the core fix for the autoplay issue: FiveM's CEF will only allow
+    // the YouTube <video> element to play with sound after a user gesture.
+    // The overlay captures the first click/key, fades out, and THEN calls
+    // playVideo() + unMute() so the music actually starts.
+    function handleEnter() {
+        if (userInteracted) return;
+        userInteracted = true;
+
+        // Fade the overlay out.
+        enterOverlay.classList.add('hidden');
+
+        // Start the audio now that we have a user gesture.
+        startAudioAfterInteraction();
+
+        // If the player isn't ready yet, retry shortly.
+        let retries = 0;
+        const retryTimer = setInterval(function () {
+            if (!ytPlayer || typeof ytPlayer.unMute !== 'function') {
+                if (++retries > 30) clearInterval(retryTimer);
+                return;
+            }
+            startAudioAfterInteraction();
+            clearInterval(retryTimer);
+        }, 300);
+    }
+
+    enterOverlay.addEventListener('click', handleEnter);
+    enterOverlay.addEventListener('keydown', function (e) {
+        if (e.key === 'Enter' || e.key === ' ') {
+            e.preventDefault();
+            handleEnter();
+        }
+    });
 
     /* ---------- Volume control --------------------------------------------- */
 

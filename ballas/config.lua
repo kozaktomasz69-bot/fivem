@@ -1,29 +1,32 @@
 -- ============================================================================
 -- Ballas Gang Resource - Configuration (Shared)
--- Framework: QBCore
--- This file is shared (loaded on both client and server) so any value here is
--- available in both contexts without duplicating definitions.
+-- Framework: ESX Legacy
+-- This file is shared (loaded on both client and server) AFTER
+-- @es_extended/imports.lua, so the global `ESX` object is already available.
 -- ============================================================================
 
 Config = {}
 
 -- General resource flags -----------------------------------------------------
 Config.Debug = false                 -- print extra diagnostics when true
-Config.Framework = 'qbcore'          -- framework selector (kept for portability)
 
 -- Job definition -------------------------------------------------------------
--- Mirrors what should be registered in qb-core/shared/jobs.lua (see SQL/README).
+-- Mirrors the `jobs` / `job_grades` SQL rows (see shared_jobs.lua).
 Config.JobName = 'ballas'
 
 -- Ranks/grades from lowest to highest. The index == grade number in the DB.
+-- IMPORTANT (ESX): the boss grade's `name` MUST be 'boss' because esx_society
+-- gates the boss menu on Config.BossGrades = { ['boss'] = true } (grade NAME,
+-- not number). The displayed label can still be "O.G.".
 Config.Ranks = {
     [0] = { name = 'thug',       label = 'Thug' },        -- Grade 0
     [1] = { name = 'hustler',    label = 'Hustler' },     -- Grade 1
     [2] = { name = 'shotcaller', label = 'Shot Caller' }, -- Grade 2
-    [3] = { name = 'og',         label = 'O.G.' },        -- Grade 3 (boss)
+    [3] = { name = 'boss',       label = 'O.G.' },        -- Grade 3 (boss)
 }
 
-Config.BossGrade = 3                 -- only this grade may open the boss menu
+Config.BossGrade = 3                 -- numeric grade that may open the boss menu
+Config.BossGradeName = 'boss'        -- esx_society matches on this grade name
 Config.MinGradeForGarage = 0         -- every member can use the garage (roster-limited)
 
 -- Colors ---------------------------------------------------------------------
@@ -75,6 +78,11 @@ Config.Marker = {
     bobUp   = false,
 }
 
+-- Society / bank account -----------------------------------------------------
+-- esx_society + esx_addonaccount use a shared naming convention:
+-- account name = 'society_<job>'. We reference it for deposit/withdraw.
+Config.SocietyAccount = 'society_ballas'
+
 -- Keybind to open the nearest menu when standing on a marker.
--- Uses the standard FiveM keybind system so players can rebind it.
-Config.OpenKey = 'E'                 -- maps to INPUT_CONTEXT by default
+-- Uses standard ESX/ThreeNative control: INPUT_CONTEXT (E) = control 38.
+Config.OpenKey = 'E'

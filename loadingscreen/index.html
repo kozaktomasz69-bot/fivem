@@ -25,6 +25,18 @@
     <!-- Dark scrim + blur overlay so text stays readable above the video. -->
     <div id="overlay"></div>
 
+    <!-- CLICK-TO-ENTER overlay.
+         FiveM's CEF blocks audio autoplay without a user gesture. This overlay
+         captures the first click, then fades out and lets script.js start the
+         YouTube audio (playVideo + unMute). It sits above all other layers. -->
+    <div id="enter-overlay" role="button" tabindex="0" aria-label="Click to enter">
+        <div id="enter-box">
+            <div id="enter-pulse"></div>
+            <h2 id="enter-title">CLICK TO ENTER</h2>
+            <p id="enter-sub">Enable music &amp; loading screen</p>
+        </div>
+    </div>
+
     <!-- Main content layer (server name, tips, progress bar). -->
     <main id="content">
 

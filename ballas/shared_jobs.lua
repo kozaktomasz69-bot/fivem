@@ -1,50 +1,51 @@
 -- ============================================================================
 -- Ballas Gang - Job Registration
--- Framework: QBCore
--- QBCore stores jobs in qb-core/shared/jobs.lua. Add the block below to that
--- file (or to a resource that exports jobs to the core). Each grade must also
--- exist in the `jobs` / `job_grades` tables in the database so /setjob and
--- qb-bossmenu society functions work. The SQL below registers everything.
--- ============================================================================
-
--- Place this table inside qb-core/shared/jobs.lua (the `QBCore.Shared.Jobs`
--- table). It mirrors the SQL job_grades rows so the client and server agree.
-QBCore.Shared.Jobs = QBCore.Shared.Jobs or {}
-QBCore.Shared.Jobs['ballas'] = {
-    label = 'Ballas',
-    defaultDuty = true,
-    offDutyPay = false,
-    grades = {
-        ['0'] = { name = 'thug',       payment = 50,  label = 'Thug' },
-        ['1'] = { name = 'hustler',    payment = 75,  label = 'Hustler' },
-        ['2'] = { name = 'shotcaller', payment = 100, label = 'Shot Caller' },
-        ['3'] = { name = 'og',         payment = 150, isboss = true, label = 'O.G.' },
-    },
-}
-
--- ============================================================================
--- SQL (MySQL / MariaDB) - run once to register the job + grades.
--- This is the authoritative source; the shared.lua block above must match it.
+-- Framework: ESX Legacy
+--
+-- ESX stores jobs in the database, NOT in a shared Lua file. Run the SQL below
+-- once against your ESX database (the same DB oxmysql / es_extended connects
+-- to). It registers:
+--   * the `jobs` row
+--   * the four `job_grades` rows (grade 3 = boss, so esx_society works)
+--   * the `addon_account` + `addon_account_data` rows for society money
+--
+-- IMPORTANT: grade 3's `name` column is 'boss'. esx_society authorizes the
+-- boss menu by matching grade_name against Config.BossGrades = { ['boss'] = true }.
+-- The label shown to players is 'O.G.'.
 -- ============================================================================
 
 --[[
-INSERT INTO `jobs` (`name`, `label`, `whitelisted`) VALUES
-  ('ballas', 'Ballas', 0);
+-- 1. Register the job.
+INSERT INTO `jobs` (`name`, `label`) VALUES
+  ('ballas', 'Ballas');
 
+-- 2. Register the four ranks/grades.
+--    ESX job_grades columns: job_name, grade, name, label, salary,
+--    skin_male, skin_female.
 INSERT INTO `job_grades`
-  (`job_name`, `grade`, `name`, `label`, `salary`, `skin_male`, `skin_female`, `isboss`) VALUES
-  ('ballas', 0, 'thug',       'Thug',        50,  '{}', '{}', 0),
-  ('ballas', 1, 'hustler',    'Hustler',     75,  '{}', '{}', 0),
-  ('ballas', 2, 'shotcaller', 'Shot Caller', 100, '{}', '{}', 0),
-  ('ballas', 3, 'og',         'O.G.',        150, '{}', '{}', 1);
+  (`job_name`, `grade`, `name`, `label`, `salary`, `skin_male`, `skin_female`) VALUES
+  ('ballas', 0, 'thug',       'Thug',        50,  '{}', '{}'),
+  ('ballas', 1, 'hustler',    'Hustler',     75,  '{}', '{}'),
+  ('ballas', 2, 'shotcaller', 'Shot Caller', 100, '{}', '{}'),
+  ('ballas', 3, 'boss',       'O.G.',        150, '{}', '{}');
 
--- Society account (qb-management) so qb-bossmenu can hold gang funds.
-INSERT INTO `management_funds` (`id`, `job_name`, `amount`, `type`) VALUES
-  (NULL, 'ballas', 0, 'boss');
+-- 3. Society bank account (esx_addonaccount / esx_society).
+--    esx_society expects the account name to be 'society_<job>'.
+INSERT INTO `addon_account` (`name`, `label`, `shared`) VALUES
+  ('society_ballas', 'Ballas', 1);
+
+INSERT INTO `addon_account_data` (`account_name`, `money`) VALUES
+  ('society_ballas', 0);
 ]]
 
--- NOTE for QBCore users:
--- * qb-management / qb-bossmenu reads `isboss = 1` on grade 3 to gate the
---   society menu, so hire/fire/promote/demote + deposit/withdraw work out of
---   the box once the SQL above is applied.
--- * To make a player an O.G. in-game:  /setjob ballas 3
+-- ============================================================================
+-- In-game commands (run as an admin)
+-- ============================================================================
+-- Give a player the gang job at a specific rank:
+--   /setjob <id> ballas <grade>
+-- Examples:
+--   /setjob 12 ballas 0   -> Thug
+--   /setjob 12 ballas 3   -> O.G. (boss, can open the boss menu)
+--
+-- After running the SQL, restart the resource:
+--   restart ballas
