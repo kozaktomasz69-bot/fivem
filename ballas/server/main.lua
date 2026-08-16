@@ -77,48 +77,36 @@ RegisterNetEvent('ballas:server:SpawnVehicle', function(model)
         return
     end
 
-    -- Validate the model on the server (client hashes are not trusted).
-    local hash = GetHashKey(model)
-    if not IsModelInCdimage(hash) or not IsModelAVehicle(hash) then
-        TriggerClientEvent('esx:showNotification', src, 'Invalid vehicle model.')
-        return
-    end
+    -- NOTE: model validation via IsModelInCdimage/IsModelAVehicle is NOT done
+    -- here - those are CLIENT-ONLY natives and would error on the server. The
+    -- roster check above (MinGradeForModel) already guarantees `model` is one
+    -- of our whitelisted Config.Vehicles entries, which is sufficient.
 
     local plate = MakePlate()
     local spawn = Config.Locations.Garage.spawn
 
-    -- ESX server-side vehicle creation. The callback receives the created
-    -- entity (server-owned), which we configure then hand to the client.
-    ESX.CreateVehicle({
-        model = hash,
-        plate = plate,
-        vehicle = {
-            colors = { Config.VehiclePrimaryColor, Config.VehicleSecondaryColor },
-            dirtLevel = 0.0,
-        },
-        coords = vector4(spawn.x, spawn.y, spawn.z, spawn.w),
-        type = 'automobile',
-    }, function(veh)
-        if not veh or not DoesEntityExist(veh) then
-            TriggerClientEvent('esx:showNotification', src, 'Failed to spawn vehicle.')
-            return
-        end
+    -- Server-side vehicle creation via ESX OneSync. This is server-safe and
+    -- returns the network id directly in the callback. We do NOT call any
+    -- vehicle visual natives here (SetVehicleColours, SetVehicleFuelLevel,
+    -- etc. are client-only) - the client applies paint/plate/fuel/dirt in the
+    -- 'ballas:client:VehicleSpawned' handler.
+    ESX.OneSync.SpawnVehicle(model, vector3(spawn.x, spawn.y, spawn.z), spawn.w,
+        { plate = plate }, function(networkId)
+            -- networkId is enough; verify the entity exists (shared native).
+            local veh = NetworkGetEntityFromNetworkId(networkId)
+            if not veh or not DoesEntityExist(veh) then
+                TriggerClientEvent('esx:showNotification', src, 'Failed to spawn vehicle.')
+                return
+            end
 
-        -- Authoritative paint (purple primary + secondary).
-        SetVehicleColours(veh, Config.VehiclePrimaryColor, Config.VehicleSecondaryColor)
-        SetVehicleExtraColours(veh, Config.VehiclePrimaryColor, 0)
-        SetVehicleNumberPlateText(veh, plate)
-        SetVehicleFuelLevel(veh, 100.0)
-        SetVehicleDirtLevel(veh, 0.0)
+            -- Optional: hand keys via a vehicle-keys resource if present.
+            if GetResourceState('esx_vehiclekey') == 'started' then
+                TriggerEvent('esx_vehiclekey:giveKeys', plate, src)
+            end
 
-        -- Optional: hand keys via a vehicle-keys resource if present.
-        if GetResourceState('esx_vehiclekey') == 'started' then
-            TriggerEvent('esx_vehiclekey:giveKeys', plate, src)
-        end
-
-        local netId = NetworkGetNetworkIdFromEntity(veh)
-        TriggerClientEvent('ballas:client:VehicleSpawned', src, netId, plate)
-    end)
+            -- Hand off to the client for seat placement + visual config.
+            TriggerClientEvent('ballas:client:VehicleSpawned', src, networkId, plate)
+        end, 'automobile')
 end)
 
 -- ----------------------------------------------------------------------------

@@ -219,12 +219,15 @@ RegisterNetEvent('ballas:client:VehicleSpawned', function(netId, plate)
     end
     if not DoesEntityExist(veh) then return end
 
-    -- Apply purple primary + secondary paint (also applied server-side).
+    -- Apply purple primary + secondary paint (client-side natives; the server
+    -- cannot use these).
     SetVehicleColours(veh, Config.VehiclePrimaryColor, Config.VehicleSecondaryColor)
     SetVehicleExtraColours(veh, Config.VehiclePrimaryColor, 0)
 
-    -- Plate is set server-side; ensure visible.
+    -- Plate + clean + full fuel, all applied here (server can't touch visuals).
     SetVehicleNumberPlateText(veh, plate)
+    SetVehicleDirtLevel(veh, 0.0)
+    SetVehicleFuelLevel(veh, 100.0)
 
     -- Put the player in the driver seat.
     SetPedIntoVehicle(PlayerPedId(), veh, -1)
